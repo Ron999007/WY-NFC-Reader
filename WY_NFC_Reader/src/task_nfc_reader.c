@@ -112,8 +112,8 @@ void Task_NFC_Reader_Init(void) {
     pcd_init();             /* Register initialization */
     pcd_antenna_reset();    /* Ensure antenna field is clear */
     BC45_Configuration(CONFIG_14443A);
-    //g_nfc_state = NFC_STATE_INIT;
-    g_nfc_state = NFC_STATE_TRANS_INIT;
+    g_nfc_state = NFC_STATE_INIT;
+    //g_nfc_state = NFC_STATE_TRANS_INIT;
 }
 
 /**
@@ -126,6 +126,7 @@ void Task_NFC_TriggerImageTransfer(void)
     if (g_nfc_state <= NFC_STATE_TAG_LEAVE_WAIT) { 
         gu8_image_flag = ~gu8_image_flag;
         g_nfc_state = NFC_STATE_TRANS_INIT;
+        drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
     }
 }
 
@@ -141,6 +142,8 @@ void Task_NFC_Reader(void) {
     uint16_t rx_len;
     
     switch (g_nfc_state) {
+        case NFC_STATE_INIT:
+            break;
         
         case NFC_STATE_LPCD_CONFIG:
             /* Entry into Low Power Card Detection mode */
@@ -309,11 +312,14 @@ void Task_NFC_Reader(void) {
                 chunk_idx = 0;        /* Reset chunk counter (0 to 194) */
                 data_offset = 0;      /* Reset payload reading offset */
                 g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK;
+                //PB2 = 0;
+                //PB3 = 0;
             }
             break;
 
         /* Step 4: Pack 64 bytes of payload, compute CRC, and send */
         case NFC_STATE_TRANS_SEND_CHUNK:
+            //PB2 = ~PB2;
             /* Fill fixed header */
             tx_buffer[0] = 0xA6;
             tx_buffer[1] = 0xF0;
@@ -377,12 +383,13 @@ void Task_NFC_Reader(void) {
                     data_offset += CHUNK_SIZE;
                     
                     if (chunk_idx >= TOTAL_CHUNKS) {
-                        drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
+                        drv_led_set_on(&g_leds[LED_ID_G], 100);
+                        //drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
                         /* Transfer successfully completed -> Play single beep */
                         Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE); 
                         g_nfc_timer = Get_TickCount();
-                        //g_nfc_state = NFC_STATE_INIT; 
-                        g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
+                        g_nfc_state = NFC_STATE_INIT; 
+                        //g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
                         
                     } else {
                         /* Proceed to send the next chunk */
