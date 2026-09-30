@@ -1,0 +1,3 @@
+[submodule "M480_BSP_CMSIS"]
+	path = M480_BSP_CMSIS
+	url = git@github.com:OpenNuvoton/M480BSP.git
