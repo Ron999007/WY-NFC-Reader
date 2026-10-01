@@ -6,6 +6,7 @@
 /* Internal Task Variables */
 static nfc_state_t g_nfc_state = NFC_STATE_INIT;
 static uint32_t g_nfc_timer = 0;
+static uint32_t g_nfc_start_time = 0;
 static uint8_t g_scan_resp = 0;
 
 /* Added declarations to fix "undeclared identifier" errors */
@@ -290,6 +291,7 @@ void Task_NFC_Reader(void) {
         case NFC_STATE_TRANS_INIT:           
             pcd_antenna_off();
             g_nfc_timer = Get_TickCount(); /* Utilize your original Get_TickCount architecture */
+            g_nfc_start_time = Get_TickCount();
             g_nfc_state = NFC_STATE_TRANS_WAIT_ANT_OFF;
             break;
 
@@ -372,14 +374,18 @@ void Task_NFC_Reader(void) {
                     g_nfc_state = NFC_STATE_TRANS_FAIL;                
                 }
                 else if(ReceivedData[2] == 0x21)
-                {                    
+                {               
+                    if (chunk_idx == 0) {
+                        drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
+                        Task_OLED_Set_Dashboard("Data sending..");
+                        /* Transfer successfully completed -> Play single beep */
+                        Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE); 
+                    }
                     chunk_idx++;
                     data_offset += CHUNK_SIZE;
                     
-                    if (chunk_idx >= TOTAL_CHUNKS) {
-                        drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
-                        /* Transfer successfully completed -> Play single beep */
-                        Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE); 
+                    if (chunk_idx >= TOTAL_CHUNKS) {    
+                        Task_OLED_Set_Dashboard("EPD Updating");
                         g_nfc_timer = Get_TickCount();
                         //g_nfc_state = NFC_STATE_INIT; 
                         g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
@@ -426,18 +432,23 @@ void Task_NFC_Reader(void) {
             break;
             
         case NFC_STATE_TRANS_WAIT_EPD_UPDATE:
-            if ((Get_TickCount() - g_nfc_timer) >= 10000) { 
+            if ((Get_TickCount() - g_nfc_timer) >= 23000) {   
+                Task_OLED_Set_Dashboard("EPD Updated");
                 gu8_image_flag = ~gu8_image_flag;
+                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE);
                 drv_led_set_on(&g_leds[LED_ID_G], 100);  
                 drv_led_set_off(&g_leds[LED_ID_R]);  
-                g_nfc_state = NFC_STATE_TRANS_INIT;
+                g_nfc_state = NFC_STATE_TRANS_INIT;   
+
+                printf("ToTal Time:%d ms\n", (Get_TickCount() - g_nfc_start_time));
             }
             break;
             
         case NFC_STATE_TRANS_FAIL:
             if ((Get_TickCount() - g_nfc_timer) >= 2000) { 
+                Task_OLED_Set_Dashboard("NO NFC Tag!");
                 /* Emit double beep to alert user about the failure */
-                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE); 
+                //Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE); 
                 drv_led_set_off(&g_leds[LED_ID_G]);
                 drv_led_set_on(&g_leds[LED_ID_R], 100); 
                 g_nfc_state = NFC_STATE_TRANS_INIT;

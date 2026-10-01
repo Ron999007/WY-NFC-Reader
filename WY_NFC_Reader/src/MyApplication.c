@@ -111,7 +111,7 @@ void MyApplication_Init(void)
 //    Task_Ymodem_Init();
 //    Task_wifi_Init();
     Task_NFC_Reader_Init();
-///    Task_OLED_Init();
+    Task_OLED_Init();
 //    Task_SDCard_Init();
     Task_Buzzer_Init();
 //    Task_DHT11_Init();
@@ -150,7 +150,7 @@ void MyApplication_Run(void)
 //        Task_Ymodem();  
 //        Task_wifi();  
         Task_NFC_Reader();   
-//        Task_OLED();        
+        Task_OLED();        
 //        Task_SDCard();
         Task_Buzzer();      // 1 ms
 //        Task_DHT11();

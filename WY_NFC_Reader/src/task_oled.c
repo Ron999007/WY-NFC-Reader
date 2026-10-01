@@ -157,7 +157,8 @@ void Task_OLED_Init(void) {
     Task_OLED_Set_Signal_Level(4);
     Task_OLED_Set_Battery_Level(3);    
     //Task_OLED_Set_Typewriter("Booting...", 100, 1500);
-    Task_OLED_Set_Marquee("Wha Yu NFC_Reader product~", 20);
+    //Task_OLED_Set_Marquee("Wha Yu NFC_Reader product~", 20);
+    Task_OLED_Set_Dashboard("WhaYu NFC_Reader");
 }
 
 void Task_OLED(void) {

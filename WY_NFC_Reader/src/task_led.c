@@ -77,7 +77,7 @@ void task_led_init(void)
     TIMER_Start(TIMER0);
     
     /* 3. Set default states */
-    drv_led_set_breathe(&g_leds[LED_ID_R], 50, 100);
+    //drv_led_set_breathe(&g_leds[LED_ID_R], 50, 100);
     //drv_led_set_on(&g_leds[LED_ID_G], 100);
     //drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
 }
