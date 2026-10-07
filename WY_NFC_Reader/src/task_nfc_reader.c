@@ -8,19 +8,26 @@ static nfc_state_t g_nfc_state = NFC_STATE_INIT;
 static uint32_t g_nfc_timer = 0;
 static uint32_t g_nfc_start_time = 0;
 static uint8_t g_scan_resp = 0;
+static uint8_t g_poll_count = 0;
 
 /* Added declarations to fix "undeclared identifier" errors */
 static char g_task_buffer[64];      /* Local buffer for UID string */
 static uint16_t g_task_bufLen;      /* Variable to store UID length */
+
+/* Dynamic Transmission Control Variables */
+static uint8_t  g_trans_cmd = 0x00;           /* Current active command */
+static const uint8_t *g_p_trans_data = NULL;  /* Pointer to payload data */
+static uint32_t g_trans_total_size = 0;       /* Total bytes to send */
+static uint16_t g_trans_total_chunks = 0;     /* Total packets to send */
  
 /* Allocate memory directly in this file */
 uint8_t tx_buffer[128]; 
-uint8_t rx_buffer[16];  
+uint8_t rx_buffer[80];  
 uint8_t ReceivedData[4];
 uint8_t gu8_image_flag = 0;
 
 /* Internal state tracking for image chunking */
-static uint16_t chunk_idx = 0;     /* Counter for sent chunks (0 to 194) */
+static uint16_t chunk_idx = 0;     /* Counter for sent chunks */
 static uint16_t data_offset = 0;   /* Offset to read from image array */
 
 uint8_t z; 
@@ -114,32 +121,39 @@ void Task_NFC_Reader_Init(void) {
     pcd_antenna_reset();    /* Ensure antenna field is clear */
     BC45_Configuration(CONFIG_14443A);
     //g_nfc_state = NFC_STATE_INIT;
-    g_nfc_state = NFC_STATE_TRANS_INIT;
+    //g_nfc_state = NFC_STATE_TRANS_INIT;
+    Task_NFC_TriggerImageTransfer(image_data);
 }
 
 /**
  * @brief Trigger the background image transmission sequence.
  *        Usually called from the external Button Task when pressed.
  */
-void Task_NFC_TriggerImageTransfer(void) 
+void Task_NFC_TriggerImageTransfer(const unsigned char *image_data) 
 {
-    /* Only allow triggering if it is in normal scanning states */
-    if (g_nfc_state <= NFC_STATE_TAG_LEAVE_WAIT) { 
-        gu8_image_flag = ~gu8_image_flag;
+    //if (g_nfc_state <= NFC_STATE_TAG_LEAVE_WAIT) { 
+        g_trans_cmd = CMD_IMG_TRANSFER;
+        g_p_trans_data = image_data;
+        g_trans_total_size = IMAGE_TOTAL_SIZE;
+        /* Calculate total packets required (Ceiling division) */
+        g_trans_total_chunks = (IMAGE_TOTAL_SIZE + PROTOCOL_PAYLOAD_SIZE - 1) / PROTOCOL_PAYLOAD_SIZE;
         g_nfc_state = NFC_STATE_TRANS_INIT;
-    }
+    //}
 }
 
 /**
  * @brief Non-blocking NFC Task State Machine
  * This is a decomposed version of the original blocking ScanUID logic.
  */
-void Task_NFC_Reader(void) {
+void Task_NFC_Reader(void) 
+{
+#define DEBUG_GPIO_ENA  0
     
     /* Variables for transmission */
-    uint16_t crc_val;
+    uint16_t crc_val, rf_crc;
     uint8_t tx_len, comm_status;
     uint16_t rx_len;
+    uint32_t u32_delay_time;
     
     switch (g_nfc_state) {
         
@@ -310,137 +324,208 @@ void Task_NFC_Reader(void) {
                 FD_Config();          /* Activate / Wake-up Tag */
                 chunk_idx = 0;        /* Reset chunk counter (0 to 194) */
                 data_offset = 0;      /* Reset payload reading offset */
+                #if DEBUG_GPIO_ENA
+                    PB3 = 0;
+                #endif
+                g_nfc_timer = Get_TickCount();
                 g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK;
             }
             break;
 
         /* Step 4: Pack 64 bytes of payload, compute CRC, and send */
         case NFC_STATE_TRANS_SEND_CHUNK:
-            /* Fill fixed header */
-            tx_buffer[0] = 0xA6;
-            tx_buffer[1] = 0xF0;
-            tx_buffer[2] = 0xFF;
+            if ((Get_TickCount() - g_nfc_timer) >= 15) {
+                #if DEBUG_GPIO_ENA
+                    PB3 = 1;
+                #endif
+                /* 1. Build FWRITE Header: 0xA6 + 0xF0 + 0xFF */
+                tx_buffer[0] = 0xA6;
+                tx_buffer[1] = 0xF0;
+                tx_buffer[2] = 0xFF;
             
-            /* Fill 64-byte image data payload */
-            if (chunk_idx < TOTAL_CHUNKS) {
-                for (int i = 0; i < CHUNK_SIZE; i++) {
-                    if(gu8_image_flag == 0) {
-                        tx_buffer[3 + i] = image_data[data_offset + i];
+                /* 2. Assemble Application Protocol Header (3 Bytes) */
+                tx_buffer[3] = g_trans_cmd;                       /* Byte 0: Command */
+                tx_buffer[4] = (uint8_t)(chunk_idx & 0xFF);       /* Byte 1: Index LSB */
+                tx_buffer[5] = (uint8_t)((chunk_idx >> 8) & 0xFF);/* Byte 2: Index MSB */
+                
+                /* 3. Assemble 59-Byte Payload */
+                for (int i = 0; i < PROTOCOL_PAYLOAD_SIZE; i++) {
+                    if ((data_offset + i) < g_trans_total_size) {
+                        tx_buffer[6 + i] = g_p_trans_data[data_offset + i];
+                    } else {
+                        tx_buffer[6 + i] = 0xFF; /* Padding for the final chunk */
                     }
-                    else
-                    {
-                        tx_buffer[3 + i] = image_data_1[data_offset + i];
-                    }                  
-//                    tx_buffer[3 + i] = i;
-//                    if((i%16) == 0)
-//                    {
-//                        printf("\n");
-//                    }
-//                    printf("%02X ", tx_buffer[3 + i]);
                 }
+                
+                /* 4. Calculate Application CRC (Covering first 62 bytes: Cmd + Idx + Payload) */
+                crc_val = crc16_2(&tx_buffer[3], 62, 0x6363); 
+                tx_buffer[65] = (uint8_t)(crc_val & 0xFF);        /* Byte 62: CRC LSB */
+                tx_buffer[66] = (uint8_t)((crc_val >> 8) & 0xFF); /* Byte 63: CRC MSB */
+                
+                /* 5. Calculate RF Link CRC (Covering full 67 bytes) */
+                crc_val = crc16_2(tx_buffer, 67, 0x6363); 
+                tx_buffer[67] = (uint8_t)(crc_val & 0xFF);         /* LSB */
+                tx_buffer[68] = (uint8_t)((crc_val >> 8) & 0xFF);  /* MSB */
+                
+                tx_len = 69;
+                rx_len = 10;
+                
+                /* Transmit packet over RF (Hardware CRC disabled) */
+                pcd_com_transceive_no_crc(tx_buffer, tx_len, 10, rx_buffer, &rx_len);
+                
+                /* Restart timer for ACK timeout detection */
+                g_nfc_timer = Get_TickCount(); 
+                g_poll_count = 0;
+                g_nfc_state = NFC_STATE_TRANS_WAIT_ACK;
+                #if DEBUG_GPIO_ENA
+                    PB3 = 0;  
+                #endif    
             }
-            //printf("\n");
-            
-            /* Calculate CRC16 for the first 67 bytes */
-            crc_val = crc16_2(tx_buffer, 67, 0x6363); 
-            tx_buffer[67] = (uint8_t)(crc_val & 0xFF);         /* LSB */
-            tx_buffer[68] = (uint8_t)((crc_val >> 8) & 0xFF);  /* MSB */
-            
-            tx_len = 69;
-            rx_len = 10;
-            
-            /* Transmit packet over RF (Hardware CRC disabled) */
-            pcd_com_transceive_no_crc(tx_buffer, tx_len, 10, rx_buffer, &rx_len);
-            //pcd_com_transceive_crc(tx_buffer, tx_len, 10, rx_buffer, &rx_len);
-            
-            /* Restart timer for ACK timeout detection */
-            g_nfc_timer = Get_TickCount(); 
-            g_nfc_state = NFC_STATE_TRANS_WAIT_ACK;
             break;
 
         /* Step 5: Wait 10ms for Tag's ACK (0x21). Handle success/error */
         case NFC_STATE_TRANS_WAIT_ACK:
-            if ((Get_TickCount() - g_nfc_timer) >= 50) { // Holtek Run @ 8 Mhz
+            if (chunk_idx == 0) {               
+                u32_delay_time = 1100;
+            } else if (chunk_idx == 1) {
+                Task_OLED_Set_Dashboard("NFC DataTxRx");
+                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
+                drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
+                u32_delay_time = 100;
+            } else {
+                u32_delay_time = 100;               
+            }
+                           
+            if ((Get_TickCount() - g_nfc_timer) >= u32_delay_time) { // Holtek Run @ 8 Mhz
             //if ((Get_TickCount() - g_nfc_timer) >= 15) { // Holtek Run @ 16 Mhz
                 //printf("T:%d\n", g_nfc_timer);
-                //PB3 = ~PB3;
+                #if DEBUG_GPIO_ENA
+                    PB3 = 1;
+                #endif
                 
                 comm_status = pcd_read(0xED, &ReceivedData[0]); 
-                //printf("Sts: %02X, Rec:%02X \n", comm_status, ReceivedData[2]);
-                
-                if(comm_status != 0x00)
-                {
-                    g_nfc_timer = Get_TickCount(); 
-                    g_nfc_state = NFC_STATE_TRANS_FAIL;                
-                }
-                else if(ReceivedData[2] == 0x21)
-                {               
-                    if (chunk_idx == 0) {
-                        drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
-                        Task_OLED_Set_Dashboard("Data sending..");
-                        /* Transfer successfully completed -> Play single beep */
-                        Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE); 
-                    }
-                    chunk_idx++;
-                    data_offset += CHUNK_SIZE;
-                    
-                    if (chunk_idx >= TOTAL_CHUNKS) {    
-                        Task_OLED_Set_Dashboard("EPD Updating");
-                        g_nfc_timer = Get_TickCount();
-                        //g_nfc_state = NFC_STATE_INIT; 
-                        g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
-                        
-                    } else {
-                        /* Proceed to send the next chunk */
-                        g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK; 
-                    }                
-                }
-                else
-                {
-                    g_nfc_timer = Get_TickCount(); 
-                }
                 #if 0
-                /* 0x21 indicates the Tag successfully received the chunk */
-                if (ReceivedData[2] == 0x21) {
-                    drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
-                    chunk_idx++;
-                    data_offset += CHUNK_SIZE;
-                    
-                    if (chunk_idx >= TOTAL_CHUNKS) {
-                        /* Transfer successfully completed -> Play single beep */
-                        Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE); 
-                        g_nfc_timer = Get_TickCount();
-                        //g_nfc_state = NFC_STATE_INIT; 
-                        g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
-                        
-                    } else {
-                        /* Proceed to send the next chunk */
-                        g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK; 
-                    }
+                    printf("Sts: %02X, Rec:%02X \n", comm_status, ReceivedData[2]);
+                #endif
+                
+                /* Check if Tag MCU has processed and released lock (SRAM_RF_READY = 1) */
+                if (ReceivedData[2] == 0x39 || ReceivedData[2] == 0x29) {
+                    g_nfc_timer = Get_TickCount();
+                    g_poll_count = 0;
+                    g_nfc_state = NFC_STATE_TRANS_POLL_MCU_REPLY; 
                 } 
-                /* Communication Error or Incorrect Response */
+                else if (ReceivedData[2] == 0x51 || ReceivedData[2] == 0x41 || ReceivedData[2] == 0x21) {
+                    g_poll_count++;
+                    if (g_poll_count > 30) { /* 300ms timeout for MCU execution */
+                        g_nfc_timer = Get_TickCount(); 
+                        g_nfc_state = NFC_STATE_TRANS_FAIL;
+                    } else {
+                        g_nfc_timer = Get_TickCount(); 
+                    }
+                }
                 else if (comm_status != 0x00) {
                     g_nfc_timer = Get_TickCount(); 
                     g_nfc_state = NFC_STATE_TRANS_FAIL;
                 }
-                /* Timeout / Tag didn't respond yet, reset wait timer */
-                else {
+                #if DEBUG_GPIO_ENA
+                    PB3 = 0;
+                #endif
+            }
+            break;
+            
+        case NFC_STATE_TRANS_POLL_MCU_REPLY:
+            if ((Get_TickCount() - g_nfc_timer) >= 15) {
+                #if DEBUG_GPIO_ENA
+                    PB3 = 1;
+                #endif
+                /* ==========================================================
+                 * 1. Safe FREAD (0x3A) to prevent 64-Byte FIFO overflow[cite: 3]
+                 * Command Format: 0x3A + StartAddr + EndAddr + CRC[cite: 13]
+                 * Read Pages 0xF0 to 0xF3 (4 pages = 16 bytes + 2 CRC = 18 bytes)
+                 * ========================================================== */
+                tx_buffer[0] = 0x3A;        /* Command: Fast Read */
+                tx_buffer[1] = 0xF0;        /* Start Page Address */
+                tx_buffer[2] = 0xFF;        /* End Page Address */
+                
+                rf_crc = crc16_2(tx_buffer, 3, 0x6363);
+                tx_buffer[3] = (uint8_t)(rf_crc & 0xFF);
+                tx_buffer[4] = (uint8_t)((rf_crc >> 8) & 0xFF);
+                
+                comm_status = pcd_com_transceive_no_crc(tx_buffer, 5, 10, rx_buffer, &rx_len);
+                #if 0
+                    printf("comm_status:%02X, RxLen:%d \n", comm_status, rx_len);
+                    for(uint8_t i = 0; i<rx_len; i++){
+                        if((i%16) == 0) printf("\n");
+                        printf("%02X ", rx_buffer[i]);
+                    }
+                    printf("\n");
+                #endif
+                /* 2. Validate ACK Command, Packet Index, and Status */
+                uint8_t expected_ack = g_trans_cmd | CMD_ACK_MASK; /* e.g., 0x81 or 0x82 */
+                
+                if (comm_status == 0 && rx_len >= 64 && 
+                    rx_buffer[0] == expected_ack &&
+                    rx_buffer[1] == (uint8_t)(chunk_idx & 0xFF) &&
+                    rx_buffer[2] == (uint8_t)((chunk_idx >> 8) & 0xFF)) {
+                    
+                    if (rx_buffer[3] == STATUS_PASS) {
+                        /* Packet verified by Tag MCU successfully */
+                        chunk_idx++;
+                        data_offset += PROTOCOL_PAYLOAD_SIZE;                       
+                        
+                        /* Check for End of Transmission */
+                        if (chunk_idx >= g_trans_total_chunks) {
+                            if (g_trans_cmd == CMD_IMG_TRANSFER) {
+                                Task_OLED_Set_Dashboard("EPD Updating");
+                                g_nfc_timer = Get_TickCount();
+                                g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
+                            } else {
+                                /* Firmware Upgrade Finished */
+                                Task_OLED_Set_Dashboard("FW Update Done");
+                                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
+                                g_nfc_state = NFC_STATE_INIT; /* Return to LPCD */
+                            }
+                        } else {
+                            g_nfc_timer = Get_TickCount();
+                            g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK; 
+                        }
+                    } else {
+                        /* Tag reported CRC failure or verification error */
+                        g_nfc_timer = Get_TickCount(); 
+                        g_nfc_state = NFC_STATE_TRANS_FAIL;
+                    }
+                } else {
+                    /* Comms error during READ */
                     g_nfc_timer = Get_TickCount(); 
+                    g_nfc_state = NFC_STATE_TRANS_FAIL;
                 }
+                #if DEBUG_GPIO_ENA
+                    PB3 = 0;
                 #endif
             }
             break;
             
         case NFC_STATE_TRANS_WAIT_EPD_UPDATE:
-            if ((Get_TickCount() - g_nfc_timer) >= 23000) {   
+            //if ((Get_TickCount() - g_nfc_timer) >= 23000) {   
+            if ((Get_TickCount() - g_nfc_timer) >= 4000) {     
                 Task_OLED_Set_Dashboard("EPD Updated");
                 gu8_image_flag = ~gu8_image_flag;
                 Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE);
                 drv_led_set_on(&g_leds[LED_ID_G], 100);  
                 drv_led_set_off(&g_leds[LED_ID_R]);  
-                g_nfc_state = NFC_STATE_TRANS_INIT;   
+                //g_nfc_state = NFC_STATE_INIT;
+                //g_nfc_state = NFC_STATE_TRANS_INIT;   
 
                 printf("ToTal Time:%d ms\n", (Get_TickCount() - g_nfc_start_time));
+                
+                if (Task_Image_Flag_Get() == 0)
+                {
+                    Task_NFC_TriggerImageTransfer(image_data);
+                } 
+                else 
+                {
+                    Task_NFC_TriggerImageTransfer(image_data_1);
+                }
             }
             break;
             
@@ -448,16 +533,23 @@ void Task_NFC_Reader(void) {
             if ((Get_TickCount() - g_nfc_timer) >= 2000) { 
                 Task_OLED_Set_Dashboard("NO NFC Tag!");
                 /* Emit double beep to alert user about the failure */
-                //Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE); 
+                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE); 
                 drv_led_set_off(&g_leds[LED_ID_G]);
                 drv_led_set_on(&g_leds[LED_ID_R], 100); 
-                g_nfc_state = NFC_STATE_TRANS_INIT;
+                //g_nfc_state = NFC_STATE_INIT;
+                //g_nfc_state = NFC_STATE_TRANS_INIT;
+                Task_NFC_TriggerImageTransfer(image_data);
             }            
             break;
 
         default:
-            //g_nfc_state = NFC_STATE_INIT;
-            g_nfc_state = NFC_STATE_TRANS_INIT;
+            g_nfc_state = NFC_STATE_INIT;
+            //g_nfc_state = NFC_STATE_TRANS_INIT;
             break;
     }
+}
+
+uint8_t Task_Image_Flag_Get(void)
+{
+    return gu8_image_flag;
 }

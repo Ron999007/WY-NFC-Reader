@@ -86,7 +86,15 @@ void Task_Button(void)
         {
             printf("Button %d Short Clicked!\n", msg.id);
             
-            Task_NFC_TriggerImageTransfer();
+            //Task_NFC_TriggerImageTransfer();
+            if (Task_Image_Flag_Get() == 0)
+            {
+                Task_NFC_TriggerImageTransfer(image_data);
+            } 
+            else 
+            {
+                Task_NFC_TriggerImageTransfer(image_data_1);
+            }
 #if 0            
             /* Control LEDs defined in task_led.h */
             switch (msg.id) 

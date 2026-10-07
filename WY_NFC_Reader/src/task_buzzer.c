@@ -9,7 +9,7 @@
 /* ====================================================================
  * Debug Configuration
  * ==================================================================== */
-#define BUZZER_DEBUG_ENABLE 1
+#define BUZZER_DEBUG_ENABLE 0
 
 #if BUZZER_DEBUG_ENABLE
     #define BUZ_LOG(fmt, ...) printf("[BUZ] " fmt "\r\n", ##__VA_ARGS__)
