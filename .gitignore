@@ -4,10 +4,12 @@ lst/
 *.uvguix 
 *.uvguix.* 
 *.uvoptx 
+*.uvprojx
 *.bak 
 *.dep 
 *.lst 
 *.obj
+*.ini
 
 #For IAR
 Debug/
