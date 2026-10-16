@@ -416,7 +416,7 @@ void Task_NFC_Reader(void)
                 } 
                 else if (ReceivedData[2] == 0x51 || ReceivedData[2] == 0x41 || ReceivedData[2] == 0x21) {
                     g_poll_count++;
-                    if (g_poll_count > 30) { /* 300ms timeout for MCU execution */
+                    if (g_poll_count > 3) { /* 300ms timeout for MCU execution */
                         g_nfc_timer = Get_TickCount(); 
                         g_nfc_state = NFC_STATE_TRANS_FAIL;
                     } else {
@@ -489,6 +489,10 @@ void Task_NFC_Reader(void)
                             g_nfc_timer = Get_TickCount();
                             g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK; 
                         }
+                    } else if (rx_buffer[3] == STATUS_LOW_VOL) {
+                        Task_OLED_Set_Dashboard("Tag Low Vol!");
+                        g_nfc_timer = Get_TickCount();
+                        g_nfc_state = NFC_STATE_TRANS_TAG_LOW_VOL; 
                     } else {
                         /* Tag reported CRC failure or verification error */
                         g_nfc_timer = Get_TickCount(); 
@@ -529,6 +533,25 @@ void Task_NFC_Reader(void)
             }
             break;
             
+        case NFC_STATE_TRANS_TAG_LOW_VOL:
+            if ((Get_TickCount() - g_nfc_timer) >= 2000) { 
+                /* Emit double beep to alert user about the failure */
+                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE); 
+                drv_led_set_off(&g_leds[LED_ID_G]);
+                drv_led_set_on(&g_leds[LED_ID_R], 100); 
+                //g_nfc_state = NFC_STATE_INIT;
+                //g_nfc_state = NFC_STATE_TRANS_INIT;
+                if (Task_Image_Flag_Get() == 0)
+                {
+                    Task_NFC_TriggerImageTransfer(image_data);
+                } 
+                else 
+                {
+                    Task_NFC_TriggerImageTransfer(image_data_1);
+                }
+            }                     
+            break;
+            
         case NFC_STATE_TRANS_FAIL:
             if ((Get_TickCount() - g_nfc_timer) >= 2000) { 
                 Task_OLED_Set_Dashboard("NO NFC Tag!");
@@ -538,7 +561,14 @@ void Task_NFC_Reader(void)
                 drv_led_set_on(&g_leds[LED_ID_R], 100); 
                 //g_nfc_state = NFC_STATE_INIT;
                 //g_nfc_state = NFC_STATE_TRANS_INIT;
-                Task_NFC_TriggerImageTransfer(image_data);
+                if (Task_Image_Flag_Get() == 0)
+                {
+                    Task_NFC_TriggerImageTransfer(image_data);
+                } 
+                else 
+                {
+                    Task_NFC_TriggerImageTransfer(image_data_1);
+                }
             }            
             break;
 

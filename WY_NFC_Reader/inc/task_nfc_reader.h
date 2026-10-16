@@ -10,8 +10,10 @@
 #define CMD_FW_UPGRADE        0x02
 #define CMD_ACK_MASK          0x80  /* Tag ACK response mask (e.g., 0x81 for Image ACK) */
 
+#define STATUS_LOW_VOL		  0x02
 #define STATUS_PASS           0x01
 #define STATUS_FAIL           0x00
+
 
 #define PROTOCOL_PACKET_SIZE  64
 #define PROTOCOL_PAYLOAD_SIZE 59    /* 64 - 1(Cmd) - 2(Idx) - 2(CRC) = 59 Bytes */
@@ -47,6 +49,7 @@ typedef enum {
     NFC_STATE_TRANS_WAIT_ACK,        /* Poll NS_REG (0xED) for Tag MCU processing */
     NFC_STATE_TRANS_POLL_MCU_REPLY,  /* Read Tag's SRAM (0x3A) for ACK packet */
     NFC_STATE_TRANS_WAIT_EPD_UPDATE, /* Keep RF power ON until EPD finishes updating */
+    NFC_STATE_TRANS_TAG_LOW_VOL,    
     NFC_STATE_TRANS_FAIL             /* Transmission failure handling */
 } nfc_state_t;
 
