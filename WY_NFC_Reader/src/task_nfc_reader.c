@@ -19,6 +19,13 @@ static uint8_t  g_trans_cmd = 0x00;           /* Current active command */
 static const uint8_t *g_p_trans_data = NULL;  /* Pointer to payload data */
 static uint32_t g_trans_total_size = 0;       /* Total bytes to send */
 static uint16_t g_trans_total_chunks = 0;     /* Total packets to send */
+
+/* Dynamic Protocol Control Variables */
+static uint8_t  g_active_cmd = 0x00;      /* Controls the current application phase */
+static uint32_t g_tx_delay = 15;          
+static uint32_t g_rx_delay = 15;
+static uint32_t g_poll_start_time = 0;    /* Timeout tracker for voltage polling */
+static uint32_t g_vol_stable_start_time = 0;   /* Timer to ensure >4000mV for >1 second */
  
 /* Allocate memory directly in this file */
 uint8_t tx_buffer[128]; 
@@ -132,7 +139,7 @@ void Task_NFC_Reader_Init(void) {
 void Task_NFC_TriggerImageTransfer(const unsigned char *image_data) 
 {
     //if (g_nfc_state <= NFC_STATE_TAG_LEAVE_WAIT) { 
-        g_trans_cmd = CMD_IMG_TRANSFER;
+        g_trans_cmd = CMD_INIT_EPD;
         g_p_trans_data = image_data;
         g_trans_total_size = IMAGE_TOTAL_SIZE;
         /* Calculate total packets required (Ceiling division) */
@@ -301,7 +308,7 @@ void Task_NFC_Reader(void)
          * Image Transmission Flow (Triggered by Button)
          * ------------------------------------------------------------- */
          
-        /* Step 1: Turn off antenna to reset tag, begin 500ms wait */
+        /* Turn off antenna to reset tag, begin 500ms wait */
         case NFC_STATE_TRANS_INIT:           
             pcd_antenna_off();
             g_nfc_timer = Get_TickCount(); /* Utilize your original Get_TickCount architecture */
@@ -309,7 +316,7 @@ void Task_NFC_Reader(void)
             g_nfc_state = NFC_STATE_TRANS_WAIT_ANT_OFF;
             break;
 
-        /* Step 2: 500ms elapsed. Turn on antenna, begin 1000ms wait */
+        /* 500ms elapsed. Turn on antenna, begin 1000ms wait */
         case NFC_STATE_TRANS_WAIT_ANT_OFF:
             if ((Get_TickCount() - g_nfc_timer) >= 500) {
                 pcd_antenna_on();
@@ -318,7 +325,7 @@ void Task_NFC_Reader(void)
             }
             break;
 
-        /* Step 3: 1000ms elapsed. Wake up Tag, reset counters */
+        /* 1000ms elapsed. Wake up Tag, reset counters */
         case NFC_STATE_TRANS_WAIT_ANT_ON:
             if ((Get_TickCount() - g_nfc_timer) >= 1000) {
                 FD_Config();          /* Activate / Wake-up Tag */
@@ -327,14 +334,17 @@ void Task_NFC_Reader(void)
                 #if DEBUG_GPIO_ENA
                     PB3 = 0;
                 #endif
+                /* Initialize Unified Protocol Parameters */
+                g_active_cmd = g_trans_cmd; 
+                g_tx_delay = 15;            
                 g_nfc_timer = Get_TickCount();
-                g_nfc_state = NFC_STATE_TRANS_SEND_CHUNK;
+                g_nfc_state = NFC_STATE_TRANS_TX_PACKET;
             }
             break;
 
-        /* Step 4: Pack 64 bytes of payload, compute CRC, and send */
-        case NFC_STATE_TRANS_SEND_CHUNK:
-            if ((Get_TickCount() - g_nfc_timer) >= 15) {
+        /* Unified MAC Layer: Transmission (TX) */
+        case NFC_STATE_TRANS_TX_PACKET:
+            if ((Get_TickCount() - g_nfc_timer) >= g_tx_delay) {
                 #if DEBUG_GPIO_ENA
                     PB3 = 1;
                 #endif
@@ -344,7 +354,7 @@ void Task_NFC_Reader(void)
                 tx_buffer[2] = 0xFF;
             
                 /* 2. Assemble Application Protocol Header (3 Bytes) */
-                tx_buffer[3] = g_trans_cmd;                       /* Byte 0: Command */
+                tx_buffer[3] = g_active_cmd;                      /* Byte 0: Command */
                 tx_buffer[4] = (uint8_t)(chunk_idx & 0xFF);       /* Byte 1: Index LSB */
                 tx_buffer[5] = (uint8_t)((chunk_idx >> 8) & 0xFF);/* Byte 2: Index MSB */
                 
@@ -373,30 +383,46 @@ void Task_NFC_Reader(void)
                 /* Transmit packet over RF (Hardware CRC disabled) */
                 pcd_com_transceive_no_crc(tx_buffer, tx_len, 10, rx_buffer, &rx_len);
                 
+                /* Configure Dynamic RX Delay based on the active command */
+                if (g_active_cmd == CMD_INIT_EPD) {
+                    /* EPD Booster Soft-Start takes longer[cite: 21] */
+                    Task_OLED_Set_Dashboard("Serching...");
+                    Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
+                    drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
+                    g_rx_delay = 1100; 
+                } else if (g_active_cmd == CMD_IMG_TRANSFER) {
+                    /* Pure data streaming to EPD RAM is fast */
+                    Task_OLED_Set_Dashboard("NFC DataTxRx");
+                    g_rx_delay = 100; 
+                } else {
+                    /* Polling and final execution commands */
+                    g_rx_delay = 100; 
+                }
+                
                 /* Restart timer for ACK timeout detection */
                 g_nfc_timer = Get_TickCount(); 
                 g_poll_count = 0;
-                g_nfc_state = NFC_STATE_TRANS_WAIT_ACK;
+                g_nfc_state = NFC_STATE_TRANS_WAIT_MCU;
                 #if DEBUG_GPIO_ENA
                     PB3 = 0;  
                 #endif    
             }
             break;
 
-        /* Step 5: Wait 10ms for Tag's ACK (0x21). Handle success/error */
-        case NFC_STATE_TRANS_WAIT_ACK:
-            if (chunk_idx == 0) {               
-                u32_delay_time = 1100;
-            } else if (chunk_idx == 1) {
-                Task_OLED_Set_Dashboard("NFC DataTxRx");
-                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
-                drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
-                u32_delay_time = 100;
-            } else {
-                u32_delay_time = 100;               
-            }
+        /* Unified MAC Layer: Wait for Tag MCU Processing (Polling NS_REG) */
+        case NFC_STATE_TRANS_WAIT_MCU:
+//            if (chunk_idx == 0) {               
+//                u32_delay_time = 1100;
+//            } else if (chunk_idx == 1) {
+//                Task_OLED_Set_Dashboard("NFC DataTxRx");
+//                Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
+//                drv_led_set_blink(&g_leds[LED_ID_G], 100, 100);
+//                u32_delay_time = 100;
+//            } else {
+//                u32_delay_time = 100;               
+//            }
                            
-            if ((Get_TickCount() - g_nfc_timer) >= u32_delay_time) { // Holtek Run @ 8 Mhz
+            if ((Get_TickCount() - g_nfc_timer) >= g_rx_delay) { // Holtek Run @ 8 Mhz
             //if ((Get_TickCount() - g_nfc_timer) >= 15) { // Holtek Run @ 16 Mhz
                 //printf("T:%d\n", g_nfc_timer);
                 #if DEBUG_GPIO_ENA
@@ -412,11 +438,11 @@ void Task_NFC_Reader(void)
                 if (ReceivedData[2] == 0x39 || ReceivedData[2] == 0x29) {
                     g_nfc_timer = Get_TickCount();
                     g_poll_count = 0;
-                    g_nfc_state = NFC_STATE_TRANS_POLL_MCU_REPLY; 
+                    g_nfc_state = NFC_STATE_TRANS_RX_PACKET; 
                 } 
                 else if (ReceivedData[2] == 0x51 || ReceivedData[2] == 0x41 || ReceivedData[2] == 0x21) {
                     g_poll_count++;
-                    if (g_poll_count > 3) { /* 300ms timeout for MCU execution */
+                    if (g_poll_count > 3) { 
                         g_nfc_timer = Get_TickCount(); 
                         g_nfc_state = NFC_STATE_TRANS_FAIL;
                     } else {
@@ -433,7 +459,7 @@ void Task_NFC_Reader(void)
             }
             break;
             
-        case NFC_STATE_TRANS_POLL_MCU_REPLY:
+        case NFC_STATE_TRANS_RX_PACKET:
             if ((Get_TickCount() - g_nfc_timer) >= 15) {
                 #if DEBUG_GPIO_ENA
                     PB3 = 1;
@@ -461,13 +487,115 @@ void Task_NFC_Reader(void)
                     printf("\n");
                 #endif
                 /* 2. Validate ACK Command, Packet Index, and Status */
-                uint8_t expected_ack = g_trans_cmd | CMD_ACK_MASK; /* e.g., 0x81 or 0x82 */
+                uint8_t expected_ack = g_active_cmd | CMD_ACK_MASK; /* e.g., 0x81 or 0x82 */
                 
                 if (comm_status == 0 && rx_len >= 64 && 
                     rx_buffer[0] == expected_ack &&
                     rx_buffer[1] == (uint8_t)(chunk_idx & 0xFF) &&
                     rx_buffer[2] == (uint8_t)((chunk_idx >> 8) & 0xFF)) {
-                    
+                        
+                    if (rx_buffer[3] == STATUS_PASS) {    
+                        /* --- Phase 0: Initialization Done & Version Received --- */
+                        if (g_active_cmd == CMD_INIT_EPD) {
+                        
+                            /* 1. Extract Tag Firmware Version from ACK payload [Byte 4, 5, 6] */
+                            uint8_t fw_major = rx_buffer[4];
+                            uint8_t fw_minor = rx_buffer[5];
+                            uint8_t fw_patch = rx_buffer[6];
+                            
+                            /* 2. Display Version Information on OLED and Console */
+                            char version_buf[16];
+                            snprintf(version_buf, sizeof(version_buf), "FW: V%u.%u.%u", fw_major, fw_minor, fw_patch);
+                            Task_OLED_Set_FW_Version(version_buf);
+                            printf("\r\n[NFC] Tag Firmware Version: V%u.%u.%u\r\n", fw_major, fw_minor, fw_patch);
+                            
+                            /* 3. Proceed seamlessly to Phase 1: Data Transmission */
+                            g_active_cmd = CMD_IMG_TRANSFER;
+                            chunk_idx = 0;
+                            data_offset = 0;
+                            g_tx_delay = 15; /* Fast transmission mode */
+                            
+                            g_nfc_timer = Get_TickCount();
+                            g_nfc_state = NFC_STATE_TRANS_TX_PACKET;                            
+                        }
+                        /* --- Phase 1: Data Transmission --- */
+                        else if (g_active_cmd == CMD_IMG_TRANSFER || g_active_cmd == CMD_FW_UPGRADE) {
+                            chunk_idx++;
+                            data_offset += PROTOCOL_PAYLOAD_SIZE;                       
+                            
+                            if (chunk_idx >= g_trans_total_chunks) {
+                                if (g_active_cmd == CMD_IMG_TRANSFER) {
+                                    /* Switch phase to Voltage Polling */
+                                    Task_OLED_Set_Dashboard("Polling Voltage");
+                                    g_poll_start_time = Get_TickCount();
+                                    g_vol_stable_start_time = 0; /* Initialize stability timer */
+                                    g_active_cmd = CMD_POLL_VOLTAGE;
+                                    g_tx_delay = 250; /* Slow down TX for capacitor charging */
+                                    chunk_idx = 0;    /* Reset index for polling commands */
+                                    
+                                    g_nfc_timer = Get_TickCount();
+                                    g_nfc_state = NFC_STATE_TRANS_TX_PACKET;
+                                } else {
+                                    /* Firmware Upgrade Finished */
+                                    Task_OLED_Set_Dashboard("FW Update Done");
+                                    Task_Buzzer_SetMode(BUZZER_MODE_BEEP_ONCE);
+                                    g_nfc_state = NFC_STATE_INIT; 
+                                }
+                            } else {
+                                /* Send Next Chunk */
+                                g_nfc_timer = Get_TickCount();
+                                g_nfc_state = NFC_STATE_TRANS_TX_PACKET; 
+                            }
+                        } 
+                        /* --- Phase 2: Voltage Polling --- */
+                        else if (g_active_cmd == CMD_POLL_VOLTAGE) {
+                            uint16_t tag_vol_mv = rx_buffer[4] | ((uint16_t)rx_buffer[5] << 8);
+                            printf("NFC Tag Vol: %d\n", tag_vol_mv);
+                            
+                            /* Check if voltage is strictly >= 4000mV */
+                            if (tag_vol_mv >= 4000) {
+                                /* If it just hit the target, start the timer */
+                                if (g_vol_stable_start_time == 0) {
+                                    g_vol_stable_start_time = Get_TickCount();
+                                }
+                                
+                                /* Voltage target stabilized for > 1 second (1000ms) */
+                                if ((Get_TickCount() - g_vol_stable_start_time) > 1000) {
+                                    g_active_cmd = CMD_UPDATE_EPD;
+                                    g_tx_delay = 15; /* Return to fast execution */
+                                }
+                            } else {
+                                /* Voltage dropped below target, reset stability timer */
+                                g_vol_stable_start_time = 0;
+                            }
+                            
+                            /* Check overall 10-second timeout regardless of stability */
+                            if (g_active_cmd == CMD_POLL_VOLTAGE && ((Get_TickCount() - g_poll_start_time) >= 10000)) {
+                                printf("TimeOut:%d\n",(Get_TickCount() - g_poll_start_time));
+                                g_active_cmd = CMD_UPDATE_FAIL;
+                                g_tx_delay = 15;
+                            }
+                            g_nfc_timer = Get_TickCount();
+                            g_nfc_state = NFC_STATE_TRANS_TX_PACKET;
+                        }
+                        /* --- Phase 3: Final Execution Command ACK --- */
+                        else if (g_active_cmd == CMD_UPDATE_EPD) {
+                            Task_OLED_Set_Dashboard("EPD Updating");
+                            g_nfc_timer = Get_TickCount();
+                            g_nfc_state = NFC_STATE_TRANS_WAIT_EPD_UPDATE;
+                        }
+                        else if (g_active_cmd == CMD_UPDATE_FAIL) {
+                            Task_OLED_Set_Dashboard("Timeout! Vol Low");
+                            g_nfc_timer = Get_TickCount();
+                            g_nfc_state = NFC_STATE_TRANS_TAG_LOW_VOL;
+                        }
+                    } 
+                    else {
+                        /* Tag CRC failure or verification error */
+                        g_nfc_timer = Get_TickCount(); 
+                        g_nfc_state = NFC_STATE_TRANS_FAIL;
+                    }
+#if 0                    
                     if (rx_buffer[3] == STATUS_PASS) {
                         /* Packet verified by Tag MCU successfully */
                         chunk_idx++;
@@ -498,11 +626,13 @@ void Task_NFC_Reader(void)
                         g_nfc_timer = Get_TickCount(); 
                         g_nfc_state = NFC_STATE_TRANS_FAIL;
                     }
+#endif
                 } else {
                     /* Comms error during READ */
                     g_nfc_timer = Get_TickCount(); 
                     g_nfc_state = NFC_STATE_TRANS_FAIL;
                 }
+
                 #if DEBUG_GPIO_ENA
                     PB3 = 0;
                 #endif
@@ -521,6 +651,8 @@ void Task_NFC_Reader(void)
                 //g_nfc_state = NFC_STATE_TRANS_INIT;   
 
                 printf("ToTal Time:%d ms\n", (Get_TickCount() - g_nfc_start_time));
+                
+                //Task_OLED_Set_FW_Version("");
                 
                 if (Task_Image_Flag_Get() == 0)
                 {

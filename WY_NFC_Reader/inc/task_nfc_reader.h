@@ -8,6 +8,11 @@
  * ==================================================================== */
 #define CMD_IMG_TRANSFER      0x01
 #define CMD_FW_UPGRADE        0x02
+#define CMD_POLL_VOLTAGE      0x03
+#define CMD_UPDATE_EPD        0x04
+#define CMD_UPDATE_FAIL       0x05
+#define CMD_INIT_EPD          0x06
+#define CMD_READ_VERSION      0x07
 #define CMD_ACK_MASK          0x80  /* Tag ACK response mask (e.g., 0x81 for Image ACK) */
 
 #define STATUS_LOW_VOL		  0x02
@@ -41,16 +46,19 @@ typedef enum {
     NFC_STATE_TAG_REPORT,            /* Process and print UID data */
     NFC_STATE_TAG_LEAVE_WAIT,        /* Cooling time before next detection */
 
-    /* --- Additional states for image transmission & PassThrough mode --- */
-    NFC_STATE_TRANS_INIT,            /* Prepare for transmission (Turn off antenna) */
-    NFC_STATE_TRANS_WAIT_ANT_OFF,    /* Wait 500ms after antenna is turned off */
-    NFC_STATE_TRANS_WAIT_ANT_ON,     /* Wait 1000ms after antenna is turned on */
-    NFC_STATE_TRANS_SEND_CHUNK,      /* Pack and transmit 64-byte payload */
-    NFC_STATE_TRANS_WAIT_ACK,        /* Poll NS_REG (0xED) for Tag MCU processing */
-    NFC_STATE_TRANS_POLL_MCU_REPLY,  /* Read Tag's SRAM (0x3A) for ACK packet */
-    NFC_STATE_TRANS_WAIT_EPD_UPDATE, /* Keep RF power ON until EPD finishes updating */
-    NFC_STATE_TRANS_TAG_LOW_VOL,    
-    NFC_STATE_TRANS_FAIL             /* Transmission failure handling */
+    /* --- Unified Protocol MAC Layer States --- */
+    NFC_STATE_TRANS_INIT,           
+    NFC_STATE_TRANS_WAIT_ANT_OFF,   
+    NFC_STATE_TRANS_WAIT_ANT_ON,    
+    
+    NFC_STATE_TRANS_TX_PACKET,      /* Unified Transmission State (Data, Poll, Cmd) */
+    NFC_STATE_TRANS_WAIT_MCU,       /* Unified MCU Processing Polling */
+    NFC_STATE_TRANS_RX_PACKET,      /* Unified Receive & Dispatch State */
+
+    /* --- Operation Complete States --- */
+    NFC_STATE_TRANS_WAIT_EPD_UPDATE,
+    NFC_STATE_TRANS_TAG_LOW_VOL,
+    NFC_STATE_TRANS_FAIL
 } nfc_state_t;
 
 /* Public Function Prototypes */
@@ -61,6 +69,7 @@ void Task_NFC_Reader(void);
  * @brief Trigger the image transmission sequence. Call when button is pressed.
  */
 void Task_NFC_TriggerImageTransfer(const unsigned char *image_data);
+void Task_NFC_TriggerReadVersion(void);
 uint8_t Task_Image_Flag_Get(void);
 
 #endif /* TASK_NFC_READER_H */

@@ -25,6 +25,14 @@ void Task_OLED(void);
 void Task_OLED_Set_Dashboard(const char *text);
 
 /**
+ * @brief Sets the persistent Tag firmware version to be displayed at the bottom right.
+ *        This text will persist across other UI updates as a session indicator.
+ *        Pass an empty string ("") to clear the version display from the screen.
+ * @param version Pointer to a null-terminated string representing the version (e.g., "V1.0.0").
+ */
+void Task_OLED_Set_FW_Version(const char *version);
+
+/**
  * @brief Sets the OLED to display a smooth, horizontally scrolling text (Marquee effect).
  * @param text     Pointer to a null-terminated string to scroll.
  * @param speed_ms The delay in milliseconds between each scroll frame.

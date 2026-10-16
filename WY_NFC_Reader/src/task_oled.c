@@ -49,6 +49,7 @@ typedef enum {
 static ui_mode_e current_ui_mode = UI_MODE_STATIC;
 
 static char dashboard_text[64] = "Booting..."; 
+static char fw_version_text[16] = "";
 static uint8_t current_signal_level = 4;
 static uint8_t current_battery_level = 3;
 static volatile bool flag_needs_refresh = true;
@@ -100,6 +101,13 @@ void Task_OLED_Set_Dashboard(const char *text) {
     current_ui_mode = UI_MODE_STATIC;
     strncpy(dashboard_text, text, sizeof(dashboard_text)-1);
     dashboard_text[sizeof(dashboard_text)-1] = '\0'; 
+    flag_needs_refresh = true;
+}
+
+void Task_OLED_Set_FW_Version(const char *version) {
+    if (!version) return;
+    strncpy(fw_version_text, version, sizeof(fw_version_text)-1);
+    fw_version_text[sizeof(fw_version_text)-1] = '\0';
     flag_needs_refresh = true;
 }
 
@@ -235,6 +243,16 @@ void Task_OLED(void) {
                         int16_t text_width = strlen(dashboard_text) * 8;
                         int16_t center_x = (text_width < 128) ? ((128 - text_width) / 2) : 0;
                         drv_oled_ssd1306_print(&oled_drv, center_x, text_y_pos, temp_buf, OLED_SCALE_1_5X);
+                    }
+                    
+                    /* Draw FW Version at Bottom Right (Y = 54) using 1X Scale */
+                    if (strlen(fw_version_text) > 0) {
+                        /* Assumption: OLED_SCALE_1X uses a ~6px wide font (e.g., 5x7 with spacing) */
+                        int16_t fw_text_width = strlen(fw_version_text) * 6;
+                        int16_t fw_x = 128 - fw_text_width - 2; /* 2 pixels right padding */
+                        if (fw_x < 0) fw_x = 0;
+                        /* Place at Y=54 so the 8px height fits completely within the 64px display */
+                        drv_oled_ssd1306_print(&oled_drv, fw_x, 54, fw_version_text, OLED_SCALE_1X);
                     }
 
                     /* Trigger FSM to update all pages sequentially via I2C */
