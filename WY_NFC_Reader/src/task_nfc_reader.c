@@ -502,12 +502,23 @@ void Task_NFC_Reader(void)
                             uint8_t fw_major = rx_buffer[4];
                             uint8_t fw_minor = rx_buffer[5];
                             uint8_t fw_patch = rx_buffer[6];
+                            uint8_t tag_img_idx = rx_buffer[7];
                             
                             /* 2. Display Version Information on OLED and Console */
                             char version_buf[16];
                             snprintf(version_buf, sizeof(version_buf), "FW: V%u.%u.%u", fw_major, fw_minor, fw_patch);
                             Task_OLED_Set_FW_Version(version_buf);
-                            printf("\r\n[NFC] Tag Firmware Version: V%u.%u.%u\r\n", fw_major, fw_minor, fw_patch);
+                            printf("\r\n[NFC] Tag Firmware Version: V%u.%u.%u, Tag Image index:%d\r\n", fw_major, fw_minor, fw_patch, tag_img_idx);
+                            
+                            uint8_t next_img_idx = (tag_img_idx + 1) % 3; // Cycle logic: 0->1, 1->2, 2->0
+                            
+                            if (next_img_idx == 0) {
+                                g_p_trans_data = image_data;
+                            } else if (next_img_idx == 1) {
+                                g_p_trans_data = image_data_1;
+                            } else {
+                                g_p_trans_data = image_data_2;
+                            }
                             
                             /* 3. Proceed seamlessly to Phase 1: Data Transmission */
                             g_active_cmd = CMD_IMG_TRANSFER;
@@ -553,7 +564,8 @@ void Task_NFC_Reader(void)
                             printf("NFC Tag Vol: %d\n", tag_vol_mv);
                             
                             /* Check if voltage is strictly >= 4000mV */
-                            if (tag_vol_mv >= 4000) {
+                            //if (tag_vol_mv >= 4000) {
+                            if (tag_vol_mv >= 3700) {
                                 /* If it just hit the target, start the timer */
                                 if (g_vol_stable_start_time == 0) {
                                     g_vol_stable_start_time = Get_TickCount();
@@ -643,7 +655,7 @@ void Task_NFC_Reader(void)
             //if ((Get_TickCount() - g_nfc_timer) >= 23000) {   
             if ((Get_TickCount() - g_nfc_timer) >= 4000) {     
                 Task_OLED_Set_Dashboard("EPD Updated");
-                gu8_image_flag = ~gu8_image_flag;
+                //gu8_image_flag = ~gu8_image_flag;
                 Task_Buzzer_SetMode(BUZZER_MODE_BEEP_DOUBLE);
                 drv_led_set_on(&g_leds[LED_ID_G], 100);  
                 drv_led_set_off(&g_leds[LED_ID_R]);  
@@ -653,7 +665,7 @@ void Task_NFC_Reader(void)
                 printf("ToTal Time:%d ms\n", (Get_TickCount() - g_nfc_start_time));
                 
                 //Task_OLED_Set_FW_Version("");
-                
+                #if 0
                 if (Task_Image_Flag_Get() == 0)
                 {
                     Task_NFC_TriggerImageTransfer(image_data);
@@ -662,6 +674,8 @@ void Task_NFC_Reader(void)
                 {
                     Task_NFC_TriggerImageTransfer(image_data_1);
                 }
+                #endif
+                g_nfc_state = NFC_STATE_TRANS_INIT;
             }
             break;
             
@@ -673,6 +687,7 @@ void Task_NFC_Reader(void)
                 drv_led_set_on(&g_leds[LED_ID_R], 100); 
                 //g_nfc_state = NFC_STATE_INIT;
                 //g_nfc_state = NFC_STATE_TRANS_INIT;
+                #if 0
                 if (Task_Image_Flag_Get() == 0)
                 {
                     Task_NFC_TriggerImageTransfer(image_data);
@@ -681,6 +696,8 @@ void Task_NFC_Reader(void)
                 {
                     Task_NFC_TriggerImageTransfer(image_data_1);
                 }
+                #endif
+                g_nfc_state = NFC_STATE_TRANS_INIT;
             }                     
             break;
             
@@ -693,6 +710,7 @@ void Task_NFC_Reader(void)
                 drv_led_set_on(&g_leds[LED_ID_R], 100); 
                 //g_nfc_state = NFC_STATE_INIT;
                 //g_nfc_state = NFC_STATE_TRANS_INIT;
+                #if 0
                 if (Task_Image_Flag_Get() == 0)
                 {
                     Task_NFC_TriggerImageTransfer(image_data);
@@ -701,6 +719,8 @@ void Task_NFC_Reader(void)
                 {
                     Task_NFC_TriggerImageTransfer(image_data_1);
                 }
+                #endif
+                g_nfc_state = NFC_STATE_TRANS_INIT;
             }            
             break;
 
