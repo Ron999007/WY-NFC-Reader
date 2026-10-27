@@ -565,7 +565,7 @@ void Task_NFC_Reader(void)
                             
                             /* Check if voltage is strictly >= 4000mV */
                             //if (tag_vol_mv >= 4000) {
-                            if (tag_vol_mv >= 3700) {
+                            if (tag_vol_mv >= 3500) {
                                 /* If it just hit the target, start the timer */
                                 if (g_vol_stable_start_time == 0) {
                                     g_vol_stable_start_time = Get_TickCount();
@@ -582,7 +582,7 @@ void Task_NFC_Reader(void)
                             }
                             
                             /* Check overall 10-second timeout regardless of stability */
-                            if (g_active_cmd == CMD_POLL_VOLTAGE && ((Get_TickCount() - g_poll_start_time) >= 10000)) {
+                            if (g_active_cmd == CMD_POLL_VOLTAGE && ((Get_TickCount() - g_poll_start_time) >= 30000)) {
                                 printf("TimeOut:%d\n",(Get_TickCount() - g_poll_start_time));
                                 g_active_cmd = CMD_UPDATE_FAIL;
                                 g_tx_delay = 15;
