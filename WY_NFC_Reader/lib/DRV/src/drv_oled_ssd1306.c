@@ -76,8 +76,15 @@ void drv_oled_ssd1306_init(ssd1306_obj_t *obj, i2c_io_interface_t *io, uint8_t i
     send_cmd(obj, 0x40); /* Display Start Line 0 */
     send_cmd(obj, 0x8D); send_cmd(obj, 0x14); /* Charge Pump */
     send_cmd(obj, 0x20); send_cmd(obj, 0x00); /* Horizontal Addressing */
-    send_cmd(obj, 0xA1); /* Segment Re-map */
-    send_cmd(obj, 0xC8); /* COM Output Scan Direction */
+    /* ====================================================================
+     * Modify here for 180-degree rotation toggle
+     * 0xA0 / 0xC0 = Normal (0 degree)
+     * 0xA1 / 0xC8 = Flipped (180 degree)
+     * ==================================================================== */
+    send_cmd(obj, 0xA0); /* Segment Re-map: Normal mapping (Change from 0xA1 to 0xA0) */
+    send_cmd(obj, 0xC0); /* COM Output Scan Direction: Normal scan (Change from 0xC8 to 0xC0) */
+    //send_cmd(obj, 0xA1); /* Segment Re-map */
+    //send_cmd(obj, 0xC8); /* COM Output Scan Direction */
     
     /* COM Pins Hardware Configuration differs between 32 and 64 height */
     send_cmd(obj, 0xDA); send_cmd(obj, (obj->height == 64) ? 0x12 : 0x02); 
