@@ -565,7 +565,8 @@ void Task_NFC_Reader(void)
                             
                             /* Check if voltage is strictly >= 4000mV */
                             //if (tag_vol_mv >= 4000) {
-                            if (tag_vol_mv >= 3500) {
+                            //if (tag_vol_mv >= 3500) {
+                            if (tag_vol_mv >= 3700) {
                                 /* If it just hit the target, start the timer */
                                 if (g_vol_stable_start_time == 0) {
                                     g_vol_stable_start_time = Get_TickCount();
