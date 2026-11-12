@@ -18,9 +18,14 @@ pcd_param pcd;
 	
 void pcd_init()
 {
-	pcd.u27VA = 0xF8;
+	//pcd.u27VA = 0xF8;
+	//pcd.u28VA = 0x3F;
+	//pcd.u29VA = 0x16;
+    
+    // High Tx Power
+	pcd.u27VA = 0xFF;
 	pcd.u28VA = 0x3F;
-	pcd.u29VA = 0x16;
+	pcd.u29VA = 0x3F;
 	
 	pcd.u27VB = 0xF8;
 	pcd.u28VB = 0x20;
